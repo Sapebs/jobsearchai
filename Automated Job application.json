@@ -1,0 +1,509 @@
+{
+  "name": "Automated Job application",
+  "nodes": [
+    {
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "jobs",
+        "returnAll": true,
+        "filterType": "none"
+      },
+      "id": "556f4dbc-f132-44b0-8c2c-b914b2669f32",
+      "name": "Check Existing Hashes",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        224,
+        512
+      ],
+      "alwaysOutputData": true,
+      "credentials": {
+        "supabaseApi": {
+          "id": "CavtQfkH6HFzqIQb",
+          "name": "Supabase account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "https://serpapi.com/search?engine=google_jobs",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "serpApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "q",
+              "value": "=={{ ($('Webhook').item.json.body.query || 'Automation Engineer') + ' (' + ($('Webhook').item.json.body.location || 'Remote') + ')' }}"
+            },
+            {
+              "name": "hl",
+              "value": "en"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "0cb34ce1-875f-48c9-87a8-832bf0a7c80e",
+      "name": "Scrape Jobs",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        448,
+        512
+      ],
+      "executeOnce": true,
+      "credentials": {
+        "serpApi": {
+          "id": "hePiaTb8wKMECH1B",
+          "name": "SerpAPI account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const crypto = require('crypto');\nconst out = [];\n\n// Pull existing hashes from your pre-scrape Supabase node to skip duplicates\nlet existingHashes = new Set();\ntry {\n  const existingRecords = $('Supabase').all();\n  existingHashes = new Set(existingRecords.map(item => item.json?.hash_id).filter(Boolean));\n} catch (e) {\n  // Safe fallback if the Supabase node name differs or isn't connected\n}\n\nfor (const it of $input.all()) {\n  const j = it.json || {};\n  let jobs = [];\n\n  // 1. Added 'jobs_results' check for SerpApi\n  if (Array.isArray(j.jobs_results)) jobs = j.jobs_results;\n  else if (Array.isArray(j.data)) jobs = j.data;\n  else if (Array.isArray(j.results)) jobs = j.results;\n  else if (Array.isArray(j.jobs)) jobs = j.jobs;\n  else jobs = [j];\n\n  for (const raw of jobs) {\n    const company = (raw.company_name || raw.company || raw.employer || '').toString().trim();\n    const title = (raw.title || raw.job_title || raw.position || '').toString().trim();\n    const location = (raw.location || raw.job_location || raw.city || '').toString().trim();\n    \n    // 2. Extracts SerpApi apply_options link or job_id fallback\n    const rawUrl = raw.apply_options?.[0]?.link || raw.job_url || raw.url || raw.link || raw.jobUrl || raw.job_id || '';\n    const job_url = rawUrl.toString().trim();\n    \n    // 3. Skip entries with no URL to avoid empty-string hash collisions\n    if (!job_url) continue;\n\n    const description = (raw.description || raw.job_description || raw.summary || '').toString();\n    const source = (raw.via || raw.source || raw.site || j.source || 'Google Jobs').toString().trim();\n    \n    const hash_id = crypto.createHash('md5').update(job_url.toLowerCase()).digest('hex');\n\n    // 4. Output only net-new jobs not already stored in Supabase\n    if (!existingHashes.has(hash_id)) {\n      out.push({ \n        json: { company, title, location, job_url, description, source, hash_id } \n      });\n    }\n  }\n}\n\nreturn out;"
+      },
+      "id": "5d1c2d3c-e19c-46a1-843b-db245638d38f",
+      "name": "Standardize & Hash",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        672,
+        512
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Evaluate the following job against the candidate master profile in your system instructions.\n\nTitle: {{ $json.title }}\nCompany: {{ $json.company }}\nLocation: {{ $json.location }}\n\nDescription:\n{{ $json.description }}",
+        "hasOutputParser": true,
+        "options": {
+          "systemMessage": "You are an expert technical recruiter and AI career strategist. Your job is to rigorously evaluate job listings against a candidate's Master Profile to determine match compatibility.\n\n### INSTRUCTIONS:\n1. Analyze the candidate's Master Profile against the provided Job Posting.\n2. Calculate an objective match score between 0 and 100 based on core skills, stack alignment, experience level, and domain relevance. Be realistic and strict—do not over-inflate scores.\n3. Identify specific matching strengths (pros), critical skill gaps or red flags (cons), and key technical terms missing from the candidate's background.\n\n### CANDIDATE MASTER PROFILE:\n- Title: Full-Stack Automation & AI Developer\n- Core Skills: n8n, Make.com, Python, Node.js, FastAPI, React/Next.js, Supabase, Docker, REST APIs, Webhooks.\n- AI & LLMs: OpenAI API, Claude, Gemini, HuggingFace, RAG pipelines, Botpress.\n- Focus Areas: Workflow automation, backend content engines, web scraping, custom code nodes, dynamic integrations.\n- Preferred Roles: Automation Engineer, AI Developer, Full-Stack Developer, RevOps Engineer, No-Code/Low-Code Engineer.\n- Work Preference: Remote or Hybrid.\n\n\n### OUTPUT FORMAT:\nRespond ONLY with a valid raw JSON object matching this schema. Do not add conversational text or markdown.\n\n{\n  \"match_score\": 85,\n  \"summary\": \"1-2 sentence concise executive summary of fit.\",\n  \"pros\": [\n    \"Direct experience with n8n and API integrations\"\n  ],\n  \"cons\": [\n    \"Missing required enterprise Java experience\"\n  ],\n  \"missing_keywords\": [\n    \"Java\",\n    \"Kubernetes\"\n  ]\n}"
+        }
+      },
+      "id": "e180b716-c6a5-4f87-affe-b07e9082b93b",
+      "name": "Job Fit Scoring",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        1120,
+        112
+      ]
+    },
+    {
+      "parameters": {
+        "schemaType": "manual",
+        "inputSchema": "{\n  \"type\": \"object\",\n  \"properties\": {\n    \"match_score\": {\n      \"type\": \"number\",\n      \"description\": \"Score from 0 to 100 based on job fit\"\n    },\n    \"summary\": {\n      \"type\": \"string\",\n      \"description\": \"1-2 sentence summary of candidate fit\"\n    },\n    \"pros\": {\n      \"type\": \"array\",\n      \"items\": { \"type\": \"string\" }\n    },\n    \"cons\": {\n      \"type\": \"array\",\n      \"items\": { \"type\": \"string\" }\n    },\n    \"missing_keywords\": {\n      \"type\": \"array\",\n      \"items\": { \"type\": \"string\" }\n    }\n  },\n  \"required\": [\"match_score\", \"summary\", \"pros\", \"cons\", \"missing_keywords\"]\n}"
+      },
+      "id": "cf7a7580-06c8-45c7-89e8-82e8e68a312d",
+      "name": "Score Schema",
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.3,
+      "position": [
+        1264,
+        352
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// 1. Get the original job details currently being processed in the loop\nconst originalJob = $('Loop Over Items').item.json;\n\n// 2. Get the AI's scored output (adjusting for the 'output' wrapper)\nconst aiResult = $input.item.json.output || $input.item.json;\n\n// 3. Merge them together for Supabase\nreturn {\n  json: {\n    ...originalJob,\n    match_score: aiResult.match_score || 0,\n    summary: aiResult.summary || \"\",\n    pros: aiResult.pros || [],\n    cons: aiResult.cons || [],\n    missing_keywords: aiResult.missing_keywords || []\n  }\n};"
+      },
+      "id": "4d834a05-e387-4087-9e3c-b79edd552438",
+      "name": "Merge Job + Score",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1472,
+        224
+      ]
+    },
+    {
+      "parameters": {
+        "tableId": "jobs",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "hash_id",
+              "fieldValue": "={{ $json.hash_id }}"
+            },
+            {
+              "fieldId": "company",
+              "fieldValue": "={{ $json.company }}"
+            },
+            {
+              "fieldId": "title",
+              "fieldValue": "={{ $json.title }}"
+            },
+            {
+              "fieldId": "location",
+              "fieldValue": "={{ $json.location }}"
+            },
+            {
+              "fieldId": "job_url",
+              "fieldValue": "={{ $json.job_url }}"
+            },
+            {
+              "fieldId": "description",
+              "fieldValue": "={{ $json.description }}"
+            },
+            {
+              "fieldId": "match_score",
+              "fieldValue": "={{ $json.match_score }}"
+            },
+            {
+              "fieldId": "reasoning",
+              "fieldValue": "={{ $json.reasoning }}"
+            }
+          ]
+        }
+      },
+      "id": "ec879011-3679-4e98-bdb4-7cac6132ee9e",
+      "name": "Upsert Scored Jobs",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        1696,
+        224
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "CavtQfkH6HFzqIQb",
+          "name": "Supabase account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "threshold",
+              "leftValue": "={{ $('Merge Job + Score').item.json.match_score }}",
+              "rightValue": 75,
+              "operator": {
+                "type": "number",
+                "operation": "gte"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "id": "460a945e-60cb-4e72-af93-72cbb94e5622",
+      "name": "High Match Threshold",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1200,
+        672
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const rows = $input.all().map(i => i.json).filter(j => Object.keys(j).length > 0);\nlet html = '<h2>New High-Match Jobs</h2>';\nfor (const j of rows) {\n  let r = {};\n  try { r = JSON.parse(j.reasoning || '{}'); } catch (e) { r = {}; }\n  const pros = (r.pros || []).map(p => '<li>' + p + '</li>').join('');\n  const cons = (r.cons || []).map(c => '<li>' + c + '</li>').join('');\n  html += '<div style=\"margin-bottom:16px\">';\n  html += '<h3>' + j.title + ' — ' + j.company + ' (' + j.match_score + '/100)</h3>';\n  html += '<p>' + (j.location || '') + '</p>';\n  html += '<p><strong>Pros:</strong></p><ul>' + pros + '</ul>';\n  html += '<p><strong>Cons:</strong></p><ul>' + cons + '</ul>';\n  html += '<p><a href=\"' + j.job_url + '\">Apply here</a></p>';\n  html += '</div><hr>';\n}\nreturn [{ json: { html, count: rows.length } }];"
+      },
+      "id": "e4659182-b83e-451c-9082-cf5559e711ab",
+      "name": "Build Digest",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1440,
+        672
+      ]
+    },
+    {
+      "parameters": {
+        "sendTo": "unimawho.leadgen@gmail.com",
+        "subject": "=New job matches ({{ $json.count }}) — {{ $now.toFormat(\"MMM d, yyyy\") }}",
+        "message": "={{ $json.html }}",
+        "options": {}
+      },
+      "id": "b33965d0-09b0-4534-af44-be38d163330e",
+      "name": "Send High-Score Alert",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        1648,
+        672
+      ],
+      "webhookId": "1fb6f053-5015-49ce-ab4b-738ffdda4e12",
+      "executeOnce": true,
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "HJnvrHKSXdR95JwU",
+          "name": "Gmail account 3"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "model": "openai/gpt-oss-safeguard-20b",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGroq",
+      "typeVersion": 1,
+      "position": [
+        1072,
+        320
+      ],
+      "id": "f10634ba-3742-4b45-b05c-a9ebfd43f0aa",
+      "name": "Groq Chat Model",
+      "credentials": {
+        "groqApi": {
+          "id": "rIYhRFRA3A9jRIIe",
+          "name": "Groq account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        896,
+        512
+      ],
+      "id": "7ad1c674-e39d-46be-9630-e4678374d9b1",
+      "name": "Loop Over Items"
+    },
+    {
+      "parameters": {
+        "amount": 10
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1920,
+        432
+      ],
+      "id": "f2f39f3b-dd04-4f6b-af64-cc68cdc92be8",
+      "name": "Wait",
+      "webhookId": "826aa181-02f4-441e-8a38-a48e3066d01e"
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "job-search",
+        "options": {
+          "allowedOrigins": "*"
+        }
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        0,
+        512
+      ],
+      "id": "599b0a2f-3177-42f1-8b90-89e912384ad3",
+      "name": "Webhook",
+      "webhookId": "26443c4c-0421-4793-906b-7d41a34236c7"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Check Existing Hashes": {
+      "main": [
+        [
+          {
+            "node": "Scrape Jobs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Scrape Jobs": {
+      "main": [
+        [
+          {
+            "node": "Standardize & Hash",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Standardize & Hash": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Job Fit Scoring": {
+      "main": [
+        [
+          {
+            "node": "Merge Job + Score",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Score Schema": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "Job Fit Scoring",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Job + Score": {
+      "main": [
+        [
+          {
+            "node": "Upsert Scored Jobs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upsert Scored Jobs": {
+      "main": [
+        [
+          {
+            "node": "Wait",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "High Match Threshold": {
+      "main": [
+        [
+          {
+            "node": "Build Digest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Digest": {
+      "main": [
+        [
+          {
+            "node": "Send High-Score Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Groq Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Job Fit Scoring",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Over Items": {
+      "main": [
+        [
+          {
+            "node": "High Match Threshold",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Job Fit Scoring",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Check Existing Hashes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "versionId": "07f9c9a3-d369-409e-b624-363799ecb539",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "102319d8e8aa4c5eb93b0a606e725efcc7eb7ae75b65d4cccc985ad7817d0cb4"
+  },
+  "nodeGroups": [
+    {
+      "id": "fea47f41-99a8-45a2-a493-4885db8d9088",
+      "name": "Fetch Existing & Scrape",
+      "nodeIds": [
+        "556f4dbc-f132-44b0-8c2c-b914b2669f32",
+        "0cb34ce1-875f-48c9-87a8-832bf0a7c80e"
+      ],
+      "description": "Load already-seen job hashes from Supabase, then POST-scrape target job boards."
+    },
+    {
+      "id": "63456b54-ca8e-4e7e-af22-4c58785e02a8",
+      "name": "Standardize & Dedupe",
+      "nodeIds": [
+        "5d1c2d3c-e19c-46a1-843b-db245638d38f"
+      ],
+      "description": "Normalize job fields, hash the URL, and keep only jobs not already stored."
+    },
+    {
+      "id": "e5be7bfb-fda4-442f-93c1-a0e3b351156a",
+      "name": "AI Scoring",
+      "nodeIds": [
+        "e180b716-c6a5-4f87-affe-b07e9082b93b",
+        "cf7a7580-06c8-45c7-89e8-82e8e68a312d",
+        "f10634ba-3742-4b45-b05c-a9ebfd43f0aa"
+      ],
+      "description": "Score each net-new job against the candidate profile with structured JSON output."
+    }
+  ],
+  "id": "L4LFqt9jNMa43po4",
+  "tags": []
+}
